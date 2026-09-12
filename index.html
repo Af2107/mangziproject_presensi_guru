@@ -37,6 +37,14 @@
 
     <div id="app" class="flex-1 flex flex-col min-h-screen"></div>
 
+    <!-- Global Loading Overlay -->
+    <div id="globalLoader" class="fixed inset-0 bg-slate-950/50 backdrop-blur-sm z-[9999] hidden flex items-center justify-center">
+        <div class="bg-white p-5 rounded-2xl shadow-2xl flex items-center space-x-3">
+            <i class="fa-solid fa-circle-notch fa-spin text-indigo-600 text-2xl"></i>
+            <span class="text-xs font-bold text-slate-700" id="loaderText">Menyinkronkan data ke Cloud...</span>
+        </div>
+    </div>
+
     <!-- Notification Toast Modal -->
     <div id="notificationToast" class="fixed bottom-6 right-6 z-50 transform translate-y-20 opacity-0 transition-all duration-300 max-w-sm w-full bg-white rounded-2xl shadow-xl border border-slate-200 p-4 flex items-start space-x-3 pointer-events-none">
         <div id="toastIcon" class="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"></div>
@@ -48,8 +56,9 @@
 
     <!-- JavaScript Application Logic -->
     <script>
+        const GOOGLE_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbykzsTtwz-61QAPTSKOjwnxtVoLc32Uwg_egBeZAC6Ui2ITkpaIF0NoXNc6sC2Z5vbPeA/exec';
+
         const STORAGE_KEY_TEACHERS = 'siskolah_teachers_v2';
-        const STORAGE_KEY_ATTENDANCE = 'siskolah_attendance_v2';
         const STORAGE_KEY_SETTINGS = 'siskolah_settings_v2';
 
         const defaultSettings = {
@@ -64,6 +73,24 @@
             { id: 'T003', name: 'Dewi Lestari, S.Si', nip: '198803222014032005', subject: 'Kimia', pin: '1234', barcode: 'BC-T003' },
             { id: 'T004', name: 'Ahmad Fauzi, M.Kom', nip: '199012012019031002', subject: 'Informatika', pin: '1234', barcode: 'BC-T004' }
         ];
+
+        // Global Application State & Cloud Cache
+        let attendanceCache = [];
+        let appState = {
+            view: 'landing', 
+            currentTeacher: null,
+            adminActiveTab: 'dashboard',
+            selectedMonth: new Date().toISOString().slice(0, 7)
+        };
+
+        function showLoader(text = 'Menyinkronkan data...') {
+            document.getElementById('loaderText').textContent = text;
+            document.getElementById('globalLoader').classList.remove('hidden');
+        }
+
+        function hideLoader() {
+            document.getElementById('globalLoader').classList.add('hidden');
+        }
 
         function getSettings() {
             const data = localStorage.getItem(STORAGE_KEY_SETTINGS);
@@ -87,22 +114,43 @@
             localStorage.setItem(STORAGE_KEY_TEACHERS, JSON.stringify(teachers));
         }
 
-        function getAttendance() {
-            const data = localStorage.getItem(STORAGE_KEY_ATTENDANCE);
-            return data ? JSON.parse(data) : [];
+        // Fetch attendance from Google Sheets
+        async function fetchAttendanceFromCloud() {
+            try {
+                const response = await fetch(GOOGLE_SCRIPT_URL);
+                const result = await response.json();
+                if (result.status === 'success') {
+                    attendanceCache = result.data || [];
+                }
+            } catch (err) {
+                console.error("Gagal mengambil data dari Google Sheets:", err);
+            }
         }
 
-        function saveAttendance(attendance) {
-            localStorage.setItem(STORAGE_KEY_ATTENDANCE, JSON.stringify(attendance));
+        // Save attendance to Google Sheets
+        async function saveAttendanceToCloud(record) {
+            showLoader('Mengirim data absensi ke Cloud...');
+            try {
+                const payload = {
+                    action: 'save',
+                    ...record
+                };
+                await fetch(GOOGLE_SCRIPT_URL, {
+                    method: 'POST',
+                    mode: 'no-cors',
+                    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                    body: JSON.stringify(payload)
+                });
+                // Optimistically push to local cache & refetch
+                attendanceCache.unshift(record);
+                await fetchAttendanceFromCloud();
+            } catch (err) {
+                console.error("Gagal menyimpan ke Google Sheets:", err);
+                showNotification('Peringatan', 'Gagal menyinkronkan ke cloud, periksa koneksi internet.', 'error');
+            } finally {
+                hideLoader();
+            }
         }
-
-        // Global Application State
-        let appState = {
-            view: 'landing', // 'landing', 'teacher_login', 'teacher_dashboard', 'admin_login', 'admin_dashboard'
-            currentTeacher: null,
-            adminActiveTab: 'dashboard',
-            selectedMonth: new Date().toISOString().slice(0, 7)
-        };
 
         function showNotification(title, message, type = 'success', callback = null) {
             const toast = document.getElementById('notificationToast');
@@ -126,6 +174,13 @@
                 toast.classList.add('translate-y-20', 'opacity-0', 'pointer-events-none');
                 if (callback) callback();
             }, 2500);
+        }
+
+        async function initApp() {
+            showLoader('Memuat data dari Google Sheets...');
+            await fetchAttendanceFromCloud();
+            hideLoader();
+            render();
         }
 
         function render() {
@@ -160,7 +215,7 @@
                             <i class="fa-solid fa-fingerprint text-white text-xl"></i>
                         </div>
                         <div>
-                            <span class="text-xs uppercase tracking-wider text-indigo-400 font-semibold block">Sistem Absensi</span>
+                            <span class="text-xs uppercase tracking-wider text-indigo-400 font-semibold block">Sistem Absensi Online</span>
                             <h2 class="text-sm font-bold">${settings.schoolName}</h2>
                         </div>
                     </div>
@@ -173,13 +228,13 @@
                 <main class="max-w-4xl mx-auto w-full text-center py-12 z-10 space-y-8">
                     <div class="space-y-4">
                         <span class="bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 px-4 py-1.5 rounded-full text-xs font-semibold inline-block">
-                            Portal Absensi Guru Terpadu & Realtime
+                            Portal Absensi Terintegrasi Cloud & Sinkron Realtime
                         </span>
                         <h1 class="text-4xl sm:text-6xl font-extrabold tracking-tight leading-tight">
                             Absensi Guru Digital <br><span class="text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 to-purple-400">Face ID & Barcode</span>
                         </h1>
                         <p class="text-slate-300 text-sm sm:text-base max-w-xl mx-auto">
-                            Sistem presensi modern untuk guru dengan teknologi biometrik wajah, pemindaian barcode cepat, serta rekapitulasi kalender otomatis untuk admin sekolah.
+                            Sistem presensi modern berbasis cloud Google Sheets. Data dari HP dan Laptop akan langsung sinkron otomatis.
                         </p>
                     </div>
 
@@ -245,8 +300,7 @@
         function renderTeacherDashboardView() {
             const t = appState.currentTeacher;
             const today = new Date().toISOString().split('T')[0];
-            const attendance = getAttendance();
-            const todayRecord = attendance.find(a => a.teacherId === t.id && a.date === today);
+            const todayRecord = attendanceCache.find(a => String(a.teacherId) === String(t.id) && String(a.date).startsWith(today));
 
             return `
             <div class="min-h-screen bg-slate-900 text-slate-100 flex flex-col">
@@ -286,7 +340,7 @@
                                 <div class="flex justify-between"><span class="text-slate-400">Metode:</span><span class="font-medium text-white">${todayRecord.method}</span></div>
                                 <div class="flex justify-between"><span class="text-slate-400">Jam Catat:</span><span class="font-medium text-white">${todayRecord.time}</span></div>
                                 <div class="flex justify-between"><span class="text-slate-400">Keterangan:</span><span class="font-medium text-white">${todayRecord.notes || '-'}</span></div>
-                                ${todayRecord.photo ? `<div class="pt-2"><p class="text-slate-400 mb-1">Foto Verifikasi Wajah:</p><img src="${todayRecord.photo}" class="w-24 h-24 object-cover rounded-xl border border-slate-700"></div>` : ''}
+                                ${todayRecord.photo && todayRecord.photo !== 'null' ? `<div class="pt-2"><p class="text-slate-400 mb-1">Foto Verifikasi Wajah:</p><img src="${todayRecord.photo}" class="w-24 h-24 object-cover rounded-xl border border-slate-700"></div>` : ''}
                             </div>
                         ` : `
                             <div class="space-y-6 pt-2">
@@ -336,8 +390,8 @@
                             <span>Riwayat Absensi Anda</span>
                         </h4>
                         <div class="space-y-2">
-                            ${attendance.filter(a => a.teacherId === t.id).length === 0 ? '<p class="text-xs text-slate-400 text-center py-4">Belum ada riwayat absensi.</p>' :
-                                attendance.filter(a => a.teacherId === t.id).slice(0, 5).map(a => `
+                            ${attendanceCache.filter(a => String(a.teacherId) === String(t.id)).length === 0 ? '<p class="text-xs text-slate-400 text-center py-4">Belum ada riwayat absensi.</p>' :
+                                attendanceCache.filter(a => String(a.teacherId) === String(t.id)).slice(0, 5).map(a => `
                                     <div class="bg-slate-900/60 border border-slate-700/50 rounded-xl p-3 flex justify-between items-center text-xs">
                                         <div>
                                             <p class="font-semibold text-white">${a.date}</p>
@@ -392,10 +446,9 @@
 
         function renderAdminDashboardView() {
             const teachers = getTeachers();
-            const attendance = getAttendance();
             const settings = getSettings();
             const today = new Date().toISOString().split('T')[0];
-            const todayAttendance = attendance.filter(a => a.date === today);
+            const todayAttendance = attendanceCache.filter(a => String(a.date).startsWith(today));
             const activeTab = appState.adminActiveTab || 'dashboard';
 
             return `
@@ -441,10 +494,14 @@
                         </nav>
                     </div>
 
-                    <div class="p-4 border-t border-slate-800">
-                        <button onclick="appState.view='landing'; render();" class="w-full bg-rose-600/10 hover:bg-rose-600/20 text-rose-400 border border-rose-500/30 px-4 py-2.5 rounded-xl text-xs font-semibold transition flex items-center justify-center space-x-2">
+                    <div class="p-4 border-t border-slate-800 flex space-x-2">
+                        <button onclick="refreshCloudData()" class="flex-1 bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 px-3 py-2.5 rounded-xl text-xs font-semibold transition flex items-center justify-center space-x-1.5" title="Sinkronisasi Data">
+                            <i class="fa-solid fa-rotate"></i>
+                            <span>Sync</span>
+                        </button>
+                        <button onclick="appState.view='landing'; render();" class="flex-1 bg-rose-600/10 hover:bg-rose-600/20 text-rose-400 border border-rose-500/30 px-3 py-2.5 rounded-xl text-xs font-semibold transition flex items-center justify-center space-x-1.5">
                             <i class="fa-solid fa-right-from-bracket"></i>
-                            <span>Keluar Admin</span>
+                            <span>Keluar</span>
                         </button>
                     </div>
                 </aside>
@@ -459,8 +516,8 @@
                     </header>
 
                     <div class="p-6 flex-1 space-y-6">
-                        ${activeTab === 'dashboard' ? renderAdminTabDashboard(teachers, attendance, todayAttendance) : ''}
-                        ${activeTab === 'attendance' ? renderAdminTabCalendar(attendance, teachers) : ''}
+                        ${activeTab === 'dashboard' ? renderAdminTabDashboard(teachers, todayAttendance) : ''}
+                        ${activeTab === 'attendance' ? renderAdminTabCalendar(attendanceCache, teachers) : ''}
                         ${activeTab === 'manual' ? renderAdminTabManual(teachers) : ''}
                         ${activeTab === 'reminders' ? renderAdminTabReminders(teachers, todayAttendance) : ''}
                         ${activeTab === 'teachers' ? renderAdminTabTeachers(teachers) : ''}
@@ -470,7 +527,15 @@
             </div>`;
         }
 
-        function renderAdminTabDashboard(teachers, attendance, todayAttendance) {
+        async function refreshCloudData() {
+            showLoader('Memperbarui data dari Google Sheets...');
+            await fetchAttendanceFromCloud();
+            hideLoader();
+            showNotification('Berhasil', 'Data berhasil disinkronkan dengan Cloud.', 'success');
+            render();
+        }
+
+        function renderAdminTabDashboard(teachers, todayAttendance) {
             const totalTeachers = teachers.length;
             const presentCount = todayAttendance.filter(a => a.status === 'Hadir').length;
             const sickCount = todayAttendance.filter(a => a.status === 'Sakit').length;
@@ -537,12 +602,12 @@
                                     todayAttendance.map(a => `
                                         <tr>
                                             <td class="py-3 px-4 font-medium text-slate-800">${a.teacherName}</td>
-                                            <td class="py-3 px-4 text-slate-600">${teachers.find(t => t.id === a.teacherId)?.subject || '-'}</td>
+                                            <td class="py-3 px-4 text-slate-600">${teachers.find(t => String(t.id) === String(a.teacherId))?.subject || '-'}</td>
                                             <td class="py-3 px-4 text-slate-600">${a.method}</td>
                                             <td class="py-3 px-4 text-slate-600">${a.time}</td>
                                             <td class="py-3 px-4"><span class="px-2.5 py-1 rounded-full text-[10px] font-semibold ${a.status === 'Hadir' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}">${a.status}</span></td>
                                             <td class="py-3 px-4 text-slate-600 flex items-center space-x-2">
-                                                ${a.photo ? `<img src="${a.photo}" class="w-8 h-8 rounded-lg object-cover border border-slate-200" title="Foto Face ID">` : ''}
+                                                ${a.photo && a.photo !== 'null' ? `<img src="${a.photo}" class="w-8 h-8 rounded-lg object-cover border border-slate-200" title="Foto Face ID">` : ''}
                                                 <span>${a.notes || '-'}</span>
                                             </td>
                                         </tr>
@@ -570,7 +635,7 @@
                 <div class="bg-white rounded-2xl p-6 shadow-sm border border-slate-200 flex flex-col sm:flex-row justify-between items-center gap-4">
                     <div>
                         <h3 class="font-bold text-slate-800 text-base">Rekap Kalender Absensi Bulanan</h3>
-                        <p class="text-xs text-slate-500">Melihat status kehadiran seluruh guru dalam bentuk matriks kalender 1 bulan.</p>
+                        <p class="text-xs text-slate-500">Melihat status kehadiran seluruh guru dalam bentuk matriks kalender 1 bulan dari Cloud.</p>
                     </div>
                     <div class="flex flex-wrap items-center gap-3">
                         <div class="flex items-center space-x-2">
@@ -605,7 +670,7 @@
                                     for (let d = 1; d <= daysInMonth; d++) {
                                         const dayStr = String(d).padStart(2, '0');
                                         const dateStr = `${selectedMonth}-${dayStr}`;
-                                        const att = attendance.find(a => a.teacherId === t.id && a.date === dateStr);
+                                        const att = attendance.find(a => String(a.teacherId) === String(t.id) && String(a.date) === dateStr);
                                         let badge = '<span class="text-slate-300">-</span>';
                                         if (att) {
                                             if (att.status === 'Hadir') {
@@ -642,7 +707,7 @@
             <div class="space-y-6 fade-in">
                 <div class="bg-white rounded-2xl p-6 shadow-sm border border-slate-200 max-w-2xl">
                     <h3 class="font-bold text-slate-800 text-base mb-1">Formulir Isi Absen Manual oleh Admin</h3>
-                    <p class="text-xs text-slate-500 mb-6">Gunakan menu ini untuk mencatatkan kehadiran guru secara manual jika guru berhalangan menggunakan Face ID atau Barcode.</p>
+                    <p class="text-xs text-slate-500 mb-6">Gunakan menu ini untuk mencatatkan kehadiran guru secara manual langsung tersimpan ke Cloud.</p>
                     
                     <form id="adminManualForm" class="space-y-4">
                         <div>
@@ -667,10 +732,10 @@
                         </div>
                         <div>
                             <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Keterangan</label>
-                            <input type="text" id="manualNotes" placeholder="Contoh: Diinput manual oleh Admin karena kendala perangkat" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                            <input type="text" id="manualNotes" placeholder="Contoh: Diinput manual oleh Admin" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500">
                         </div>
                         <button type="submit" class="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold px-6 py-3 rounded-xl shadow transition">
-                            Simpan Absen Manual
+                            Simpan Absen Manual ke Cloud
                         </button>
                     </form>
                 </div>
@@ -678,13 +743,13 @@
         }
 
         function renderAdminTabReminders(teachers, todayAttendance) {
-            const absentees = teachers.filter(t => !todayAttendance.some(a => a.teacherId === t.id));
+            const absentees = teachers.filter(t => !todayAttendance.some(a => String(a.teacherId) === String(t.id)));
 
             return `
             <div class="space-y-6 fade-in">
                 <div class="bg-white rounded-2xl p-6 shadow-sm border border-slate-200">
                     <h3 class="font-bold text-slate-800 text-base mb-1">Pengingat Guru Belum Absen</h3>
-                    <p class="text-xs text-slate-500 mb-6">Daftar guru yang belum melakukan presensi hari ini. Anda dapat mengirimkan pengingat instan.</p>
+                    <p class="text-xs text-slate-500 mb-6">Daftar guru yang belum melakukan presensi hari ini berdasarkan data Cloud.</p>
 
                     <div class="space-y-3">
                         ${absentees.length === 0 ? `<p class="text-xs text-slate-400 py-6 text-center">Luar biasa! Seluruh guru telah melakukan absensi hari ini.</p>` :
@@ -810,7 +875,6 @@
             </div>`;
             document.body.insertAdjacentHTML('beforeend', modalHTML);
 
-            // Start Webcam
             navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } })
                 .then(stream => {
                     const video = document.getElementById('webcamVideo');
@@ -831,7 +895,7 @@
             if (modal) modal.remove();
         };
 
-        window.executeVerification = function(method) {
+        window.executeVerification = async function(method) {
             const video = document.getElementById('webcamVideo');
             const canvas = document.getElementById('snapshotCanvas');
             let photoData = null;
@@ -849,7 +913,6 @@
             const t = appState.currentTeacher;
             const today = new Date().toISOString().split('T')[0];
             const nowTime = new Date().toTimeString().split(' ')[0];
-            const attendance = getAttendance();
 
             const newRecord = {
                 id: 'att-' + Date.now(),
@@ -863,15 +926,14 @@
                 photo: photoData
             };
 
-            attendance.unshift(newRecord);
-            saveAttendance(attendance);
+            await saveAttendanceToCloud(newRecord);
 
-            showNotification('Absensi Berhasil', `Kehadiran ${t.name} via ${method} berhasil dicatat.`, 'success', () => {
+            showNotification('Absensi Berhasil', `Kehadiran ${t.name} via ${method} berhasil disimpan ke Cloud.`, 'success', () => {
                 render();
             });
         };
 
-        window.submitStatusForm = function(e) {
+        window.submitStatusForm = async function(e) {
             e.preventDefault();
             const statusOption = document.querySelector('input[name="statusOption"]:checked').value;
             const notes = document.getElementById('statusNotes').value;
@@ -879,7 +941,6 @@
             const t = appState.currentTeacher;
             const today = new Date().toISOString().split('T')[0];
             const nowTime = new Date().toTimeString().split(' ')[0];
-            const attendance = getAttendance();
 
             const newRecord = {
                 id: 'att-' + Date.now(),
@@ -890,13 +951,12 @@
                 method: 'Manual/Keterangan',
                 status: statusOption,
                 notes: notes,
-                photo: null
+                photo: ''
             };
 
-            attendance.unshift(newRecord);
-            saveAttendance(attendance);
+            await saveAttendanceToCloud(newRecord);
 
-            showNotification('Berhasil', `Keterangan ${statusOption} berhasil dikirim.`, 'success', () => {
+            showNotification('Berhasil', `Keterangan ${statusOption} berhasil dikirim ke Cloud.`, 'success', () => {
                 render();
             });
         };
@@ -923,7 +983,6 @@
         window.exportToPDF = function() {
             const settings = getSettings();
             const teachers = getTeachers();
-            const attendance = getAttendance();
             const selectedMonth = appState.selectedMonth || new Date().toISOString().slice(0, 7);
             const [year, month] = selectedMonth.split('-').map(Number);
             const daysInMonth = new Date(year, month, 0).getDate();
@@ -939,7 +998,7 @@
                 for (let d = 1; d <= daysInMonth; d++) {
                     const dayStr = String(d).padStart(2, '0');
                     const dateStr = `${selectedMonth}-${dayStr}`;
-                    const att = attendance.find(a => a.teacherId === t.id && a.date === dateStr);
+                    const att = attendanceCache.find(a => String(a.teacherId) === String(t.id) && String(a.date) === dateStr);
                     let badge = '-';
                     if (att) {
                         if (att.status === 'Hadir') badge = 'H';
@@ -959,7 +1018,7 @@
 
             const printWindow = window.open('', '_blank');
             if (!printWindow) {
-                showNotification('Gagal', 'Pop-up diblokir oleh browser. Izinkan pop-up untuk mengunduh PDF.', 'error');
+                showNotification('Gagal', 'Pop-up diblokir oleh browser.', 'error');
                 return;
             }
 
@@ -1002,7 +1061,7 @@
                 </html>
             `);
             printWindow.document.close();
-            showNotification('Berhasil', 'Dokumen PDF / cetak rekap absensi berhasil disiapkan.', 'success');
+            showNotification('Berhasil', 'Dokumen PDF disiapkan.', 'success');
         };
 
         window.deleteTeacher = function(id) {
@@ -1012,7 +1071,6 @@
             showNotification('Berhasil', 'Data guru berhasil dihapus.', 'success', () => { render(); });
         };
 
-        // Add Teacher Modal
         function openAddTeacherModal() {
             const modalHTML = `
             <div id="teacherModal" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
@@ -1066,7 +1124,6 @@
         }
 
         function attachEventHandlers() {
-            // Teacher Login Handler
             const teacherLoginForm = document.getElementById('teacherLoginForm');
             if (teacherLoginForm) {
                 teacherLoginForm.addEventListener('submit', (e) => {
@@ -1086,7 +1143,6 @@
                 });
             }
 
-            // Admin Login Handler
             const adminLoginForm = document.getElementById('adminLoginForm');
             if (adminLoginForm) {
                 adminLoginForm.addEventListener('submit', (e) => {
@@ -1103,7 +1159,6 @@
                 });
             }
 
-            // Admin Tabs
             document.querySelectorAll('.admin-tab-btn').forEach(btn => {
                 btn.addEventListener('click', (e) => {
                     appState.adminActiveTab = btn.getAttribute('data-tab');
@@ -1111,7 +1166,6 @@
                 });
             });
 
-            // Calendar month change
             const calendarMonthInput = document.getElementById('calendarMonthInput');
             if (calendarMonthInput) {
                 calendarMonthInput.addEventListener('change', (e) => {
@@ -1120,10 +1174,9 @@
                 });
             }
 
-            // Admin Manual Attendance Form
             const adminManualForm = document.getElementById('adminManualForm');
             if (adminManualForm) {
-                adminManualForm.addEventListener('submit', (e) => {
+                adminManualForm.addEventListener('submit', async (e) => {
                     e.preventDefault();
                     const teacherId = document.getElementById('manualTeacherId').value;
                     const date = document.getElementById('manualDate').value;
@@ -1134,8 +1187,6 @@
                     const teacher = teachers.find(t => t.id === teacherId);
                     if (!teacher) return;
 
-                    const attendance = getAttendance();
-                    const existingIndex = attendance.findIndex(a => a.teacherId === teacherId && a.date === date);
                     const record = {
                         id: 'att-' + Date.now(),
                         teacherId: teacher.id,
@@ -1145,24 +1196,17 @@
                         method: 'Manual Admin',
                         status: status,
                         notes: notes,
-                        photo: null
+                        photo: ''
                     };
 
-                    if (existingIndex >= 0) {
-                        attendance[existingIndex] = record;
-                    } else {
-                        attendance.unshift(record);
-                    }
-
-                    saveAttendance(attendance);
-                    showNotification('Berhasil', `Absensi manual untuk ${teacher.name} berhasil disimpan.`, 'success', () => {
+                    await saveAttendanceToCloud(record);
+                    showNotification('Berhasil', `Absensi manual untuk ${teacher.name} berhasil disimpan ke Cloud.`, 'success', () => {
                         appState.adminActiveTab = 'attendance';
                         render();
                     });
                 });
             }
 
-            // Add teacher button
             const addTeacherBtn = document.getElementById('addTeacherBtn');
             if (addTeacherBtn) {
                 addTeacherBtn.addEventListener('click', () => {
@@ -1170,7 +1214,6 @@
                 });
             }
 
-            // Settings Form
             const settingsForm = document.getElementById('settingsForm');
             if (settingsForm) {
                 settingsForm.addEventListener('submit', (e) => {
@@ -1187,7 +1230,7 @@
 
         // Initialize App on Load
         window.onload = function() {
-            render();
+            initApp();
         };
     </script>
 </body>
