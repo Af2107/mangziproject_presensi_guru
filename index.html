@@ -1,0 +1,1194 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sistem Absensi Guru & Admin Profesional</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Google Fonts Inter -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(6px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .fade-in { animation: fadeIn 0.3s ease-out forwards; }
+        @media print {
+            body * {
+                visibility: hidden;
+            }
+            #attendanceTableExport, #attendanceTableExport * {
+                visibility: visible;
+            }
+            #attendanceTableExport {
+                position: absolute;
+                left: 0;
+                top: 0;
+                width: 100%;
+            }
+        }
+    </style>
+</head>
+<body class="bg-slate-100 text-slate-800 min-h-screen flex flex-col antialiased">
+
+    <div id="app" class="flex-1 flex flex-col min-h-screen"></div>
+
+    <!-- Notification Toast Modal -->
+    <div id="notificationToast" class="fixed bottom-6 right-6 z-50 transform translate-y-20 opacity-0 transition-all duration-300 max-w-sm w-full bg-white rounded-2xl shadow-xl border border-slate-200 p-4 flex items-start space-x-3 pointer-events-none">
+        <div id="toastIcon" class="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"></div>
+        <div class="flex-1">
+            <h4 id="toastTitle" class="text-sm font-bold text-slate-800"></h4>
+            <p id="toastMessage" class="text-xs text-slate-500 mt-0.5"></p>
+        </div>
+    </div>
+
+    <!-- JavaScript Application Logic -->
+    <script>
+        const STORAGE_KEY_TEACHERS = 'siskolah_teachers_v2';
+        const STORAGE_KEY_ATTENDANCE = 'siskolah_attendance_v2';
+        const STORAGE_KEY_SETTINGS = 'siskolah_settings_v2';
+
+        const defaultSettings = {
+            schoolName: 'SMA Negeri 1 Nusantara',
+            academicYear: '2025/2026',
+            maxCheckInTime: '07:30'
+        };
+
+        const defaultTeachers = [
+            { id: 'T001', name: 'Dra. Hj. Siti Aminah, M.Pd', nip: '197005121994032001', subject: 'Matematika', pin: '1234', barcode: 'BC-T001' },
+            { id: 'T002', name: 'Budi Santoso, S.Pd', nip: '198208152009021003', subject: 'Fisika', pin: '1234', barcode: 'BC-T002' },
+            { id: 'T003', name: 'Dewi Lestari, S.Si', nip: '198803222014032005', subject: 'Kimia', pin: '1234', barcode: 'BC-T003' },
+            { id: 'T004', name: 'Ahmad Fauzi, M.Kom', nip: '199012012019031002', subject: 'Informatika', pin: '1234', barcode: 'BC-T004' }
+        ];
+
+        function getSettings() {
+            const data = localStorage.getItem(STORAGE_KEY_SETTINGS);
+            return data ? JSON.parse(data) : defaultSettings;
+        }
+
+        function saveSettings(settings) {
+            localStorage.setItem(STORAGE_KEY_SETTINGS, JSON.stringify(settings));
+        }
+
+        function getTeachers() {
+            const data = localStorage.getItem(STORAGE_KEY_TEACHERS);
+            if (!data) {
+                localStorage.setItem(STORAGE_KEY_TEACHERS, JSON.stringify(defaultTeachers));
+                return defaultTeachers;
+            }
+            return JSON.parse(data);
+        }
+
+        function saveTeachers(teachers) {
+            localStorage.setItem(STORAGE_KEY_TEACHERS, JSON.stringify(teachers));
+        }
+
+        function getAttendance() {
+            const data = localStorage.getItem(STORAGE_KEY_ATTENDANCE);
+            return data ? JSON.parse(data) : [];
+        }
+
+        function saveAttendance(attendance) {
+            localStorage.setItem(STORAGE_KEY_ATTENDANCE, JSON.stringify(attendance));
+        }
+
+        // Global Application State
+        let appState = {
+            view: 'landing', // 'landing', 'teacher_login', 'teacher_dashboard', 'admin_login', 'admin_dashboard'
+            currentTeacher: null,
+            adminActiveTab: 'dashboard',
+            selectedMonth: new Date().toISOString().slice(0, 7)
+        };
+
+        function showNotification(title, message, type = 'success', callback = null) {
+            const toast = document.getElementById('notificationToast');
+            const toastIcon = document.getElementById('toastIcon');
+            const toastTitle = document.getElementById('toastTitle');
+            const toastMessage = document.getElementById('toastMessage');
+
+            toastTitle.textContent = title;
+            toastMessage.textContent = message;
+
+            if (type === 'success') {
+                toastIcon.className = 'w-10 h-10 rounded-xl bg-emerald-100 text-emerald-600 flex items-center justify-center shrink-0';
+                toastIcon.innerHTML = '<i class="fa-solid fa-check text-lg"></i>';
+            } else {
+                toastIcon.className = 'w-10 h-10 rounded-xl bg-rose-100 text-rose-600 flex items-center justify-center shrink-0';
+                toastIcon.innerHTML = '<i class="fa-solid fa-triangle-exclamation text-lg"></i>';
+            }
+
+            toast.classList.remove('translate-y-20', 'opacity-0', 'pointer-events-none');
+            setTimeout(() => {
+                toast.classList.add('translate-y-20', 'opacity-0', 'pointer-events-none');
+                if (callback) callback();
+            }, 2500);
+        }
+
+        function render() {
+            const app = document.getElementById('app');
+            app.innerHTML = '';
+
+            if (appState.view === 'landing') {
+                app.innerHTML = renderLandingView();
+            } else if (appState.view === 'teacher_login') {
+                app.innerHTML = renderTeacherLoginView();
+            } else if (appState.view === 'teacher_dashboard') {
+                app.innerHTML = renderTeacherDashboardView();
+            } else if (appState.view === 'admin_login') {
+                app.innerHTML = renderAdminLoginView();
+            } else if (appState.view === 'admin_dashboard') {
+                app.innerHTML = renderAdminDashboardView();
+            }
+
+            attachEventHandlers();
+        }
+
+        function renderLandingView() {
+            const settings = getSettings();
+            return `
+            <div class="min-h-screen bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 text-white flex flex-col justify-between p-6 sm:p-12 relative overflow-hidden">
+                <div class="absolute -top-32 -left-32 w-96 h-96 bg-indigo-500/20 rounded-full blur-3xl pointer-events-none"></div>
+                <div class="absolute -bottom-32 -right-32 w-96 h-96 bg-purple-500/20 rounded-full blur-3xl pointer-events-none"></div>
+
+                <header class="max-w-5xl mx-auto w-full flex justify-between items-center z-10">
+                    <div class="flex items-center space-x-3">
+                        <div class="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center shadow-lg shadow-indigo-500/30">
+                            <i class="fa-solid fa-fingerprint text-white text-xl"></i>
+                        </div>
+                        <div>
+                            <span class="text-xs uppercase tracking-wider text-indigo-400 font-semibold block">Sistem Absensi</span>
+                            <h2 class="text-sm font-bold">${settings.schoolName}</h2>
+                        </div>
+                    </div>
+                    <button onclick="appState.view='admin_login'; render();" class="text-xs bg-white/10 hover:bg-white/20 px-4 py-2 rounded-xl backdrop-blur transition border border-white/10 flex items-center space-x-2">
+                        <i class="fa-solid fa-user-shield"></i>
+                        <span>Login Admin</span>
+                    </button>
+                </header>
+
+                <main class="max-w-4xl mx-auto w-full text-center py-12 z-10 space-y-8">
+                    <div class="space-y-4">
+                        <span class="bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 px-4 py-1.5 rounded-full text-xs font-semibold inline-block">
+                            Portal Absensi Guru Terpadu & Realtime
+                        </span>
+                        <h1 class="text-4xl sm:text-6xl font-extrabold tracking-tight leading-tight">
+                            Absensi Guru Digital <br><span class="text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 to-purple-400">Face ID & Barcode</span>
+                        </h1>
+                        <p class="text-slate-300 text-sm sm:text-base max-w-xl mx-auto">
+                            Sistem presensi modern untuk guru dengan teknologi biometrik wajah, pemindaian barcode cepat, serta rekapitulasi kalender otomatis untuk admin sekolah.
+                        </p>
+                    </div>
+
+                    <div class="flex flex-col sm:flex-row justify-center items-center gap-4 pt-4">
+                        <button onclick="appState.view='teacher_login'; render();" class="w-full sm:w-auto bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-bold px-8 py-4 rounded-2xl shadow-xl shadow-indigo-600/30 transition transform hover:-translate-y-0.5 flex items-center justify-center space-x-3 text-base">
+                            <i class="fa-solid fa-chalkboard-user text-xl"></i>
+                            <span>Mulai Absensi Guru</span>
+                        </button>
+                        <button onclick="appState.view='admin_login'; render();" class="w-full sm:w-auto bg-slate-800/80 hover:bg-slate-700 text-slate-200 font-semibold px-8 py-4 rounded-2xl border border-slate-700 transition flex items-center justify-center space-x-3 text-base">
+                            <i class="fa-solid fa-lock text-lg"></i>
+                            <span>Dashboard Administrator</span>
+                        </button>
+                    </div>
+                </main>
+
+                <footer class="text-center text-xs text-slate-500 z-10">
+                    &copy; ${new Date().getFullYear()} ${settings.schoolName}. Hak Cipta Dilindungi.
+                </footer>
+            </div>`;
+        }
+
+        function renderTeacherLoginView() {
+            const teachers = getTeachers();
+            return `
+            <div class="min-h-screen bg-slate-900 flex flex-col justify-center items-center p-6">
+                <div class="max-w-md w-full bg-slate-800 border border-slate-700/80 rounded-3xl p-8 shadow-2xl space-y-6 fade-in">
+                    <div class="flex items-center justify-between">
+                        <button onclick="appState.view='landing'; render();" class="text-slate-400 hover:text-white text-xs flex items-center space-x-1.5 transition">
+                            <i class="fa-solid fa-arrow-left"></i>
+                            <span>Kembali</span>
+                        </button>
+                        <span class="text-xs uppercase tracking-wider font-semibold text-indigo-400 bg-indigo-500/10 px-3 py-1 rounded-full">Portal Guru</span>
+                    </div>
+
+                    <div class="text-center space-y-2">
+                        <div class="w-16 h-16 bg-indigo-600/20 text-indigo-400 rounded-2xl mx-auto flex items-center justify-center text-2xl border border-indigo-500/30">
+                            <i class="fa-solid fa-user-check"></i>
+                        </div>
+                        <h2 class="text-xl font-bold text-white">Login Guru</h2>
+                        <p class="text-xs text-slate-400">Pilih nama Anda dan masukkan PIN untuk melakukan absensi.</p>
+                    </div>
+
+                    <form id="teacherLoginForm" class="space-y-4">
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-300 uppercase mb-1">Nama Guru / Mata Pelajaran</label>
+                            <select id="loginTeacherId" required class="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                <option value="">-- Pilih Guru --</option>
+                                ${teachers.map(t => `<option value="${t.id}">${t.name} (${t.subject})</option>`).join('')}
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-300 uppercase mb-1">PIN Keamanan</label>
+                            <input type="password" id="loginPin" placeholder="Masukkan 4 digit PIN (cth: 1234)" maxlength="4" required class="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 tracking-widest text-center">
+                        </div>
+                        <button type="submit" class="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-3.5 rounded-xl shadow-lg transition duration-200 text-sm">
+                            Masuk & Absen
+                        </button>
+                    </form>
+                </div>
+            </div>`;
+        }
+
+        function renderTeacherDashboardView() {
+            const t = appState.currentTeacher;
+            const today = new Date().toISOString().split('T')[0];
+            const attendance = getAttendance();
+            const todayRecord = attendance.find(a => a.teacherId === t.id && a.date === today);
+
+            return `
+            <div class="min-h-screen bg-slate-900 text-slate-100 flex flex-col">
+                <header class="bg-slate-800/80 border-b border-slate-700 px-6 py-4 flex justify-between items-center backdrop-blur">
+                    <div class="flex items-center space-x-3">
+                        <div class="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center font-bold text-white shadow">
+                            ${t.name.charAt(0)}
+                        </div>
+                        <div>
+                            <h2 class="text-sm font-bold text-white">${t.name}</h2>
+                            <p class="text-xs text-slate-400">${t.subject} &bull; NIP: ${t.nip}</p>
+                        </div>
+                    </div>
+                    <button onclick="appState.view='teacher_login'; appState.currentTeacher=null; render();" class="text-xs bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 px-3.5 py-2 rounded-xl transition flex items-center space-x-1.5">
+                        <i class="fa-solid fa-right-from-bracket"></i>
+                        <span>Keluar</span>
+                    </button>
+                </header>
+
+                <main class="max-w-2xl mx-auto w-full p-6 flex-1 space-y-6 fade-in">
+                    <div class="bg-slate-800 border border-slate-700 rounded-2xl p-6 shadow-xl space-y-4">
+                        <div class="flex justify-between items-center border-b border-slate-700 pb-4">
+                            <div>
+                                <span class="text-xs text-indigo-400 uppercase tracking-wider font-semibold">Status Hari Ini</span>
+                                <h3 class="text-lg font-bold text-white mt-0.5">${new Date().toLocaleDateString('id-ID', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</h3>
+                            </div>
+                            <div>
+                                ${todayRecord ? 
+                                    `<span class="px-3.5 py-1.5 rounded-full text-xs font-semibold ${todayRecord.status === 'Hadir' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' : todayRecord.status === 'Sakit' ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' : todayRecord.status === 'Izin' ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30' : 'bg-purple-500/20 text-purple-300 border border-purple-500/30'}">${todayRecord.status}</span>` :
+                                    `<span class="px-3.5 py-1.5 rounded-full text-xs font-semibold bg-rose-500/20 text-rose-300 border border-rose-500/30">Belum Absen</span>`
+                                }
+                            </div>
+                        </div>
+
+                        ${todayRecord ? `
+                            <div class="bg-slate-900/60 rounded-xl p-4 text-xs space-y-2 border border-slate-700/50">
+                                <div class="flex justify-between"><span class="text-slate-400">Metode:</span><span class="font-medium text-white">${todayRecord.method}</span></div>
+                                <div class="flex justify-between"><span class="text-slate-400">Jam Catat:</span><span class="font-medium text-white">${todayRecord.time}</span></div>
+                                <div class="flex justify-between"><span class="text-slate-400">Keterangan:</span><span class="font-medium text-white">${todayRecord.notes || '-'}</span></div>
+                                ${todayRecord.photo ? `<div class="pt-2"><p class="text-slate-400 mb-1">Foto Verifikasi Wajah:</p><img src="${todayRecord.photo}" class="w-24 h-24 object-cover rounded-xl border border-slate-700"></div>` : ''}
+                            </div>
+                        ` : `
+                            <div class="space-y-6 pt-2">
+                                <div class="grid grid-cols-2 gap-3">
+                                    <button onclick="openAttendanceModal('Face ID')" class="bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-500 hover:to-indigo-600 text-white p-4 rounded-2xl shadow-lg transition flex flex-col items-center justify-center space-y-2 border border-indigo-500/30">
+                                        <i class="fa-solid fa-face-smile text-2xl text-indigo-200"></i>
+                                        <span class="text-xs font-bold">Absen Face ID</span>
+                                    </button>
+                                    <button onclick="openAttendanceModal('Barcode')" class="bg-gradient-to-r from-purple-600 to-purple-700 hover:from-purple-500 hover:to-purple-600 text-white p-4 rounded-2xl shadow-lg transition flex flex-col items-center justify-center space-y-2 border border-purple-500/30">
+                                        <i class="fa-solid fa-qrcode text-2xl text-purple-200"></i>
+                                        <span class="text-xs font-bold">Absen Barcode</span>
+                                    </button>
+                                </div>
+
+                                <div class="border-t border-slate-700 pt-4 space-y-3">
+                                    <h4 class="text-xs font-semibold uppercase text-slate-400">Atau Pilih Status Kehadiran (Sakit / Izin / Cuti)</h4>
+                                    <form id="statusForm" onsubmit="submitStatusForm(event)" class="space-y-3">
+                                        <div class="grid grid-cols-3 gap-2">
+                                            <label class="cursor-pointer bg-slate-900 border border-slate-700 hover:border-indigo-500 p-2.5 rounded-xl text-center text-xs font-semibold flex items-center justify-center space-x-1 transition">
+                                                <input type="radio" name="statusOption" value="Sakit" required class="text-indigo-600 focus:ring-indigo-500">
+                                                <span>Sakit</span>
+                                            </label>
+                                            <label class="cursor-pointer bg-slate-900 border border-slate-700 hover:border-indigo-500 p-2.5 rounded-xl text-center text-xs font-semibold flex items-center justify-center space-x-1 transition">
+                                                <input type="radio" name="statusOption" value="Izin" required class="text-indigo-600 focus:ring-indigo-500">
+                                                <span>Izin</span>
+                                            </label>
+                                            <label class="cursor-pointer bg-slate-900 border border-slate-700 hover:border-indigo-500 p-2.5 rounded-xl text-center text-xs font-semibold flex items-center justify-center space-x-1 transition">
+                                                <input type="radio" name="statusOption" value="Cuti" required class="text-indigo-600 focus:ring-indigo-500">
+                                                <span>Cuti</span>
+                                            </label>
+                                        </div>
+                                        <div>
+                                            <input type="text" id="statusNotes" placeholder="Masukkan keterangan (misal: Surat dokter terlampir)" required class="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5 text-xs text-white focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                        </div>
+                                        <button type="submit" class="w-full bg-slate-700 hover:bg-slate-600 text-white font-semibold py-2.5 rounded-xl text-xs transition">
+                                            Kirim Keterangan Ketidakhadiran
+                                        </button>
+                                    </form>
+                                </div>
+                            </div>
+                        `}
+                    </div>
+
+                    <div class="bg-slate-800 border border-slate-700 rounded-2xl p-6 shadow-xl space-y-4">
+                        <h4 class="font-bold text-sm text-white flex items-center space-x-2">
+                            <i class="fa-solid fa-clock-rotate-left text-indigo-400"></i>
+                            <span>Riwayat Absensi Anda</span>
+                        </h4>
+                        <div class="space-y-2">
+                            ${attendance.filter(a => a.teacherId === t.id).length === 0 ? '<p class="text-xs text-slate-400 text-center py-4">Belum ada riwayat absensi.</p>' :
+                                attendance.filter(a => a.teacherId === t.id).slice(0, 5).map(a => `
+                                    <div class="bg-slate-900/60 border border-slate-700/50 rounded-xl p-3 flex justify-between items-center text-xs">
+                                        <div>
+                                            <p class="font-semibold text-white">${a.date}</p>
+                                            <p class="text-[10px] text-slate-400">${a.method} &bull; ${a.notes || '-'}</p>
+                                        </div>
+                                        <span class="px-2.5 py-1 rounded-full text-[10px] font-semibold ${a.status === 'Hadir' ? 'bg-emerald-500/20 text-emerald-300' : 'bg-amber-500/20 text-amber-300'}">${a.status}</span>
+                                    </div>
+                                `).join('')
+                            }
+                        </div>
+                    </div>
+                </main>
+            </div>`;
+        }
+
+        function renderAdminLoginView() {
+            return `
+            <div class="min-h-screen bg-slate-900 flex flex-col justify-center items-center p-6">
+                <div class="max-w-md w-full bg-slate-800 border border-slate-700/80 rounded-3xl p-8 shadow-2xl space-y-6 fade-in">
+                    <div class="flex items-center justify-between">
+                        <button onclick="appState.view='landing'; render();" class="text-slate-400 hover:text-white text-xs flex items-center space-x-1.5 transition">
+                            <i class="fa-solid fa-arrow-left"></i>
+                            <span>Kembali</span>
+                        </button>
+                        <span class="text-xs uppercase tracking-wider font-semibold text-purple-400 bg-purple-500/10 px-3 py-1 rounded-full">Administrator</span>
+                    </div>
+
+                    <div class="text-center space-y-2">
+                        <div class="w-16 h-16 bg-purple-600/20 text-purple-400 rounded-2xl mx-auto flex items-center justify-center text-2xl border border-purple-500/30">
+                            <i class="fa-solid fa-user-shield"></i>
+                        </div>
+                        <h2 class="text-xl font-bold text-white">Login Admin</h2>
+                        <p class="text-xs text-slate-400">Masukkan kredensial admin untuk mengakses panel manajemen.</p>
+                    </div>
+
+                    <form id="adminLoginForm" class="space-y-4">
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-300 uppercase mb-1">Username Admin</label>
+                            <input type="text" id="adminUser" placeholder="Masukkan username (cth: admin)" required class="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:ring-2 focus:ring-purple-500">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-300 uppercase mb-1">Password</label>
+                            <input type="password" id="adminPass" placeholder="Masukkan password (cth: admin123)" required class="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:ring-2 focus:ring-purple-500">
+                        </div>
+                        <button type="submit" class="w-full bg-purple-600 hover:bg-purple-500 text-white font-semibold py-3.5 rounded-xl shadow-lg transition duration-200 text-sm">
+                            Masuk Panel Admin
+                        </button>
+                    </form>
+                </div>
+            </div>`;
+        }
+
+        function renderAdminDashboardView() {
+            const teachers = getTeachers();
+            const attendance = getAttendance();
+            const settings = getSettings();
+            const today = new Date().toISOString().split('T')[0];
+            const todayAttendance = attendance.filter(a => a.date === today);
+            const activeTab = appState.adminActiveTab || 'dashboard';
+
+            return `
+            <div class="min-h-screen bg-slate-50 flex flex-col md:flex-row">
+                <!-- Sidebar -->
+                <aside class="w-full md:w-64 bg-slate-900 text-slate-300 flex flex-col justify-between shrink-0 shadow-lg">
+                    <div class="p-6 space-y-6">
+                        <div class="flex items-center space-x-3">
+                            <div class="w-9 h-9 rounded-xl bg-indigo-600 flex items-center justify-center text-white font-bold shadow">
+                                <i class="fa-solid fa-fingerprint"></i>
+                            </div>
+                            <div>
+                                <span class="text-[10px] uppercase tracking-wider text-indigo-400 font-semibold block">Admin Panel</span>
+                                <h3 class="text-xs font-bold text-white truncate w-36">${settings.schoolName}</h3>
+                            </div>
+                        </div>
+
+                        <nav class="space-y-1.5">
+                            <button data-tab="dashboard" class="admin-tab-btn w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-sm font-medium transition ${activeTab === 'dashboard' ? 'bg-indigo-600 text-white shadow-md' : 'hover:bg-slate-800 text-slate-300'}">
+                                <i class="fa-solid fa-chart-pie w-5"></i>
+                                <span>Ringkasan Dashboard</span>
+                            </button>
+                            <button data-tab="attendance" class="admin-tab-btn w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-sm font-medium transition ${activeTab === 'attendance' ? 'bg-indigo-600 text-white shadow-md' : 'hover:bg-slate-800 text-slate-300'}">
+                                <i class="fa-solid fa-calendar-days w-5"></i>
+                                <span>Rekap Kalender Bulanan</span>
+                            </button>
+                            <button data-tab="manual" class="admin-tab-btn w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-sm font-medium transition ${activeTab === 'manual' ? 'bg-indigo-600 text-white shadow-md' : 'hover:bg-slate-800 text-slate-300'}">
+                                <i class="fa-solid fa-user-pen w-5"></i>
+                                <span>Isi Absen Manual</span>
+                            </button>
+                            <button data-tab="reminders" class="admin-tab-btn w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-sm font-medium transition ${activeTab === 'reminders' ? 'bg-indigo-600 text-white shadow-md' : 'hover:bg-slate-800 text-slate-300'}">
+                                <i class="fa-solid fa-bell w-5"></i>
+                                <span>Pengingat Belum Absen</span>
+                            </button>
+                            <button data-tab="teachers" class="admin-tab-btn w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-sm font-medium transition ${activeTab === 'teachers' ? 'bg-indigo-600 text-white shadow-md' : 'hover:bg-slate-800 text-slate-300'}">
+                                <i class="fa-solid fa-chalkboard-user w-5"></i>
+                                <span>Data Guru</span>
+                            </button>
+                            <button data-tab="settings" class="admin-tab-btn w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-sm font-medium transition ${activeTab === 'settings' ? 'bg-indigo-600 text-white shadow-md' : 'hover:bg-slate-800 text-slate-300'}">
+                                <i class="fa-solid fa-gear w-5"></i>
+                                <span>Pengaturan Aplikasi</span>
+                            </button>
+                        </nav>
+                    </div>
+
+                    <div class="p-4 border-t border-slate-800">
+                        <button onclick="appState.view='landing'; render();" class="w-full bg-rose-600/10 hover:bg-rose-600/20 text-rose-400 border border-rose-500/30 px-4 py-2.5 rounded-xl text-xs font-semibold transition flex items-center justify-center space-x-2">
+                            <i class="fa-solid fa-right-from-bracket"></i>
+                            <span>Keluar Admin</span>
+                        </button>
+                    </div>
+                </aside>
+
+                <!-- Main Content Area -->
+                <main class="flex-1 flex flex-col min-h-screen">
+                    <header class="bg-white border-b border-slate-200 px-6 py-4 flex justify-between items-center shadow-sm">
+                        <h1 class="text-lg font-bold text-slate-800 capitalize">
+                            ${activeTab === 'dashboard' ? 'Ringkasan Dashboard' : activeTab === 'attendance' ? 'Rekap Kalender Absensi Bulanan' : activeTab === 'manual' ? 'Formulir Isi Absen Manual' : activeTab === 'reminders' ? 'Pengingat Guru Belum Absen' : activeTab === 'teachers' ? 'Manajemen Data Guru' : 'Pengaturan Aplikasi'}
+                        </h1>
+                        <div class="text-xs text-slate-500 font-medium">${settings.schoolName}</div>
+                    </header>
+
+                    <div class="p-6 flex-1 space-y-6">
+                        ${activeTab === 'dashboard' ? renderAdminTabDashboard(teachers, attendance, todayAttendance) : ''}
+                        ${activeTab === 'attendance' ? renderAdminTabCalendar(attendance, teachers) : ''}
+                        ${activeTab === 'manual' ? renderAdminTabManual(teachers) : ''}
+                        ${activeTab === 'reminders' ? renderAdminTabReminders(teachers, todayAttendance) : ''}
+                        ${activeTab === 'teachers' ? renderAdminTabTeachers(teachers) : ''}
+                        ${activeTab === 'settings' ? renderAdminTabSettings(settings) : ''}
+                    </div>
+                </main>
+            </div>`;
+        }
+
+        function renderAdminTabDashboard(teachers, attendance, todayAttendance) {
+            const totalTeachers = teachers.length;
+            const presentCount = todayAttendance.filter(a => a.status === 'Hadir').length;
+            const sickCount = todayAttendance.filter(a => a.status === 'Sakit').length;
+            const permitCount = todayAttendance.filter(a => a.status === 'Izin' || a.status === 'Cuti').length;
+            const absentCount = totalTeachers - (presentCount + sickCount + permitCount);
+
+            return `
+            <div class="space-y-6 fade-in">
+                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                    <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-200 flex items-center space-x-4">
+                        <div class="w-12 h-12 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center text-xl font-bold">
+                            <i class="fa-solid fa-users"></i>
+                        </div>
+                        <div>
+                            <p class="text-xs text-slate-500 font-medium">Total Guru</p>
+                            <h3 class="text-xl font-bold text-slate-800">${totalTeachers}</h3>
+                        </div>
+                    </div>
+                    <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-200 flex items-center space-x-4">
+                        <div class="w-12 h-12 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center text-xl font-bold">
+                            <i class="fa-solid fa-user-check"></i>
+                        </div>
+                        <div>
+                            <p class="text-xs text-slate-500 font-medium">Hadir Hari Ini</p>
+                            <h3 class="text-xl font-bold text-slate-800">${presentCount}</h3>
+                        </div>
+                    </div>
+                    <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-200 flex items-center space-x-4">
+                        <div class="w-12 h-12 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center text-xl font-bold">
+                            <i class="fa-solid fa-hospital-user"></i>
+                        </div>
+                        <div>
+                            <p class="text-xs text-slate-500 font-medium">Sakit / Izin</p>
+                            <h3 class="text-xl font-bold text-slate-800">${sickCount + permitCount}</h3>
+                        </div>
+                    </div>
+                    <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-200 flex items-center space-x-4">
+                        <div class="w-12 h-12 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center text-xl font-bold">
+                            <i class="fa-solid fa-user-xmark"></i>
+                        </div>
+                        <div>
+                            <p class="text-xs text-slate-500 font-medium">Belum Absen</p>
+                            <h3 class="text-xl font-bold text-slate-800">${absentCount > 0 ? absentCount : 0}</h3>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="bg-white rounded-2xl p-6 shadow-sm border border-slate-200 space-y-4">
+                    <h3 class="font-bold text-slate-800 text-base">Daftar Kehadiran Hari Ini</h3>
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left border-collapse text-xs">
+                            <thead>
+                                <tr class="bg-slate-50 text-slate-600 border-b border-slate-200">
+                                    <th class="py-3 px-4 font-semibold">Nama Guru</th>
+                                    <th class="py-3 px-4 font-semibold">Mata Pelajaran</th>
+                                    <th class="py-3 px-4 font-semibold">Metode</th>
+                                    <th class="py-3 px-4 font-semibold">Jam</th>
+                                    <th class="py-3 px-4 font-semibold">Status</th>
+                                    <th class="py-3 px-4 font-semibold">Foto / Keterangan</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-slate-100">
+                                ${todayAttendance.length === 0 ? `<tr><td colspan="6" class="py-4 text-center text-slate-400">Belum ada guru yang melakukan absensi hari ini.</td></tr>` :
+                                    todayAttendance.map(a => `
+                                        <tr>
+                                            <td class="py-3 px-4 font-medium text-slate-800">${a.teacherName}</td>
+                                            <td class="py-3 px-4 text-slate-600">${teachers.find(t => t.id === a.teacherId)?.subject || '-'}</td>
+                                            <td class="py-3 px-4 text-slate-600">${a.method}</td>
+                                            <td class="py-3 px-4 text-slate-600">${a.time}</td>
+                                            <td class="py-3 px-4"><span class="px-2.5 py-1 rounded-full text-[10px] font-semibold ${a.status === 'Hadir' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}">${a.status}</span></td>
+                                            <td class="py-3 px-4 text-slate-600 flex items-center space-x-2">
+                                                ${a.photo ? `<img src="${a.photo}" class="w-8 h-8 rounded-lg object-cover border border-slate-200" title="Foto Face ID">` : ''}
+                                                <span>${a.notes || '-'}</span>
+                                            </td>
+                                        </tr>
+                                    `).join('')
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>`;
+        }
+
+        function renderAdminTabCalendar(attendance, teachers) {
+            const selectedMonth = appState.selectedMonth || new Date().toISOString().slice(0, 7);
+            const [year, month] = selectedMonth.split('-').map(Number);
+            const daysInMonth = new Date(year, month, 0).getDate();
+
+            let daysHeader = '';
+            for (let d = 1; d <= daysInMonth; d++) {
+                daysHeader += `<th class="py-2 px-1 text-center text-xs font-semibold text-slate-600 border border-slate-200">${d}</th>`;
+            }
+
+            return `
+            <div class="space-y-6 fade-in">
+                <div class="bg-white rounded-2xl p-6 shadow-sm border border-slate-200 flex flex-col sm:flex-row justify-between items-center gap-4">
+                    <div>
+                        <h3 class="font-bold text-slate-800 text-base">Rekap Kalender Absensi Bulanan</h3>
+                        <p class="text-xs text-slate-500">Melihat status kehadiran seluruh guru dalam bentuk matriks kalender 1 bulan.</p>
+                    </div>
+                    <div class="flex flex-wrap items-center gap-3">
+                        <div class="flex items-center space-x-2">
+                            <label class="text-xs font-semibold text-slate-600">Bulan:</label>
+                            <input type="month" id="calendarMonthInput" value="${selectedMonth}" class="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        </div>
+                        <div class="flex items-center space-x-2">
+                            <button onclick="exportToExcel()" class="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-2 rounded-xl text-xs font-medium transition flex items-center space-x-1.5 shadow">
+                                <i class="fa-solid fa-file-excel"></i>
+                                <span>Export Excel</span>
+                            </button>
+                            <button onclick="exportToPDF()" class="bg-rose-600 hover:bg-rose-700 text-white px-3 py-2 rounded-xl text-xs font-medium transition flex items-center space-x-1.5 shadow">
+                                <i class="fa-solid fa-file-pdf"></i>
+                                <span>Export PDF</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="bg-white rounded-2xl p-6 shadow-sm border border-slate-200 overflow-x-auto">
+                    <table class="w-full border-collapse text-xs" id="attendanceTableExport">
+                        <thead>
+                            <tr class="bg-slate-50">
+                                <th class="py-3 px-4 text-left font-semibold text-slate-700 border border-slate-200 sticky left-0 bg-slate-50 z-10">Nama Guru</th>
+                                ${daysHeader}
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-100">
+                            ${teachers.length === 0 ? `<tr><td colspan="${daysInMonth + 1}" class="py-4 text-center text-slate-400">Belum ada data guru.</td></tr>` :
+                                teachers.map(t => {
+                                    let cells = '';
+                                    for (let d = 1; d <= daysInMonth; d++) {
+                                        const dayStr = String(d).padStart(2, '0');
+                                        const dateStr = `${selectedMonth}-${dayStr}`;
+                                        const att = attendance.find(a => a.teacherId === t.id && a.date === dateStr);
+                                        let badge = '<span class="text-slate-300">-</span>';
+                                        if (att) {
+                                            if (att.status === 'Hadir') {
+                                                badge = '<span class="w-5 h-5 rounded-full bg-emerald-100 text-emerald-700 inline-flex items-center justify-center font-bold text-[10px]" title="Hadir">H</span>';
+                                            } else if (att.status === 'Sakit') {
+                                                badge = '<span class="w-5 h-5 rounded-full bg-amber-100 text-amber-700 inline-flex items-center justify-center font-bold text-[10px]" title="Sakit">S</span>';
+                                            } else if (att.status === 'Izin') {
+                                                badge = '<span class="w-5 h-5 rounded-full bg-blue-100 text-blue-700 inline-flex items-center justify-center font-bold text-[10px]" title="Izin">I</span>';
+                                            } else if (att.status === 'Cuti') {
+                                                badge = '<span class="w-5 h-5 rounded-full bg-purple-100 text-purple-700 inline-flex items-center justify-center font-bold text-[10px]" title="Cuti">C</span>';
+                                            }
+                                        }
+                                        cells += `<td class="py-2 px-1 text-center border border-slate-200">${badge}</td>`;
+                                    }
+                                    return `
+                                        <tr>
+                                            <td class="py-3 px-4 font-medium text-slate-700 border border-slate-200 sticky left-0 bg-white z-10 whitespace-nowrap">${t.name}</td>
+                                            ${cells}
+                                        </tr>
+                                    `;
+                                }).join('')
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>`;
+        }
+
+        function renderAdminTabManual(teachers) {
+            const today = new Date().toISOString().split('T')[0];
+            let teacherOptions = teachers.map(t => `<option value="${t.id}">${t.name} (${t.subject})</option>`).join('');
+
+            return `
+            <div class="space-y-6 fade-in">
+                <div class="bg-white rounded-2xl p-6 shadow-sm border border-slate-200 max-w-2xl">
+                    <h3 class="font-bold text-slate-800 text-base mb-1">Formulir Isi Absen Manual oleh Admin</h3>
+                    <p class="text-xs text-slate-500 mb-6">Gunakan menu ini untuk mencatatkan kehadiran guru secara manual jika guru berhalangan menggunakan Face ID atau Barcode.</p>
+                    
+                    <form id="adminManualForm" class="space-y-4">
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Pilih Guru</label>
+                            <select id="manualTeacherId" required class="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                <option value="">-- Pilih Guru --</option>
+                                ${teacherOptions}
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Tanggal Absensi</label>
+                            <input type="date" id="manualDate" value="${today}" required class="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Status Kehadiran</label>
+                            <select id="manualStatus" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                <option value="Hadir">Hadir</option>
+                                <option value="Sakit">Sakit</option>
+                                <option value="Izin">Izin</option>
+                                <option value="Cuti">Cuti</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Keterangan</label>
+                            <input type="text" id="manualNotes" placeholder="Contoh: Diinput manual oleh Admin karena kendala perangkat" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        </div>
+                        <button type="submit" class="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold px-6 py-3 rounded-xl shadow transition">
+                            Simpan Absen Manual
+                        </button>
+                    </form>
+                </div>
+            </div>`;
+        }
+
+        function renderAdminTabReminders(teachers, todayAttendance) {
+            const absentees = teachers.filter(t => !todayAttendance.some(a => a.teacherId === t.id));
+
+            return `
+            <div class="space-y-6 fade-in">
+                <div class="bg-white rounded-2xl p-6 shadow-sm border border-slate-200">
+                    <h3 class="font-bold text-slate-800 text-base mb-1">Pengingat Guru Belum Absen</h3>
+                    <p class="text-xs text-slate-500 mb-6">Daftar guru yang belum melakukan presensi hari ini. Anda dapat mengirimkan pengingat instan.</p>
+
+                    <div class="space-y-3">
+                        ${absentees.length === 0 ? `<p class="text-xs text-slate-400 py-6 text-center">Luar biasa! Seluruh guru telah melakukan absensi hari ini.</p>` :
+                            absentees.map(t => `
+                                <div class="bg-slate-50 border border-slate-200 rounded-xl p-4 flex flex-col sm:flex-row justify-between items-center gap-4">
+                                    <div>
+                                        <h4 class="font-bold text-slate-800 text-sm">${t.name}</h4>
+                                        <p class="text-xs text-slate-500">Mata Pelajaran: ${t.subject} &bull; NIP: ${t.nip}</p>
+                                    </div>
+                                    <button onclick="sendReminderWhatsApp('${t.name}', '${t.nip}')" class="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl text-xs font-semibold transition flex items-center space-x-2 shadow">
+                                        <i class="fa-brands fa-whatsapp text-sm"></i>
+                                        <span>Kirim Pengingat WhatsApp</span>
+                                    </button>
+                                </div>
+                            `).join('')
+                        }
+                    </div>
+                </div>
+            </div>`;
+        }
+
+        function renderAdminTabTeachers(teachers) {
+            return `
+            <div class="space-y-6 fade-in">
+                <div class="bg-white rounded-2xl p-6 shadow-sm border border-slate-200 flex justify-between items-center">
+                    <div>
+                        <h3 class="font-bold text-slate-800 text-base">Manajemen Data Guru</h3>
+                        <p class="text-xs text-slate-500">Tambah, ubah, atau hapus data guru dan PIN keamanan.</p>
+                    </div>
+                    <button id="addTeacherBtn" class="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold px-4 py-2.5 rounded-xl text-xs transition flex items-center space-x-2 shadow">
+                        <i class="fa-solid fa-plus"></i>
+                        <span>Tambah Guru</span>
+                    </button>
+                </div>
+
+                <div class="bg-white rounded-2xl p-6 shadow-sm border border-slate-200 overflow-x-auto">
+                    <table class="w-full text-left border-collapse text-xs">
+                        <thead>
+                            <tr class="bg-slate-50 text-slate-600 border-b border-slate-200">
+                                <th class="py-3 px-4 font-semibold">Nama Lengkap</th>
+                                <th class="py-3 px-4 font-semibold">NIP</th>
+                                <th class="py-3 px-4 font-semibold">Mata Pelajaran</th>
+                                <th class="py-3 px-4 font-semibold">PIN</th>
+                                <th class="py-3 px-4 font-semibold">Barcode</th>
+                                <th class="py-3 px-4 font-semibold text-right">Aksi</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-100">
+                            ${teachers.map(t => `
+                                <tr>
+                                    <td class="py-3 px-4 font-medium text-slate-800">${t.name}</td>
+                                    <td class="py-3 px-4 text-slate-600">${t.nip}</td>
+                                    <td class="py-3 px-4 text-slate-600">${t.subject}</td>
+                                    <td class="py-3 px-4 text-slate-600 font-mono">${t.pin}</td>
+                                    <td class="py-3 px-4 text-slate-600 font-mono">${t.barcode}</td>
+                                    <td class="py-3 px-4 text-right">
+                                        <button onclick="deleteTeacher('${t.id}')" class="text-rose-600 hover:text-rose-800 p-1.5 rounded-lg transition" title="Hapus Guru">
+                                            <i class="fa-solid fa-trash"></i>
+                                        </button>
+                                    </td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            </div>`;
+        }
+
+        function renderAdminTabSettings(settings) {
+            return `
+            <div class="space-y-6 fade-in">
+                <div class="bg-white rounded-2xl p-6 shadow-sm border border-slate-200 max-w-xl">
+                    <h3 class="font-bold text-slate-800 text-base mb-1">Pengaturan Aplikasi Sekolah</h3>
+                    <p class="text-xs text-slate-500 mb-6">Ubah informasi identitas instansi dan batas jam masuk sekolah.</p>
+
+                    <form id="settingsForm" class="space-y-4">
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Nama Sekolah</label>
+                            <input type="text" id="settingSchoolName" value="${settings.schoolName}" required class="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Tahun Ajaran</label>
+                            <input type="text" id="settingAcademicYear" value="${settings.academicYear}" required class="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Batas Jam Masuk Tepat Waktu</label>
+                            <input type="time" id="settingMaxTime" value="${settings.maxCheckInTime}" required class="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        </div>
+                        <button type="submit" class="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold px-6 py-3 rounded-xl shadow transition">
+                            Simpan Perubahan
+                        </button>
+                    </form>
+                </div>
+            </div>`;
+        }
+
+        // Modal for Face ID & Barcode
+        window.openAttendanceModal = function(type) {
+            const modalHTML = `
+            <div id="attendanceModal" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                <div class="bg-slate-900 border border-slate-700 rounded-3xl p-6 max-w-md w-full space-y-6 text-center relative shadow-2xl fade-in">
+                    <button onclick="closeAttendanceModal()" class="absolute top-4 right-4 text-slate-400 hover:text-white">
+                        <i class="fa-solid fa-xmark text-lg"></i>
+                    </button>
+                    
+                    <div class="space-y-1">
+                        <h3 class="text-lg font-bold text-white">Pemindaian ${type}</h3>
+                        <p class="text-xs text-slate-400">Arahkan kamera ke wajah atau pindai barcode Anda.</p>
+                    </div>
+
+                    <div class="relative w-full h-64 bg-black rounded-2xl overflow-hidden border border-slate-700 flex items-center justify-center">
+                        <video id="webcamVideo" autoplay playsinline class="w-full h-full object-cover"></video>
+                        <canvas id="snapshotCanvas" class="hidden"></canvas>
+                        <div class="absolute inset-0 border-2 border-dashed border-indigo-500/50 rounded-2xl pointer-events-none flex items-center justify-center">
+                            <span class="bg-indigo-600/80 text-white text-[10px] px-3 py-1 rounded-full uppercase tracking-wider font-semibold animate-pulse">Scanning...</span>
+                        </div>
+                    </div>
+
+                    <button onclick="executeVerification('${type}')" class="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-3.5 rounded-xl shadow transition text-sm">
+                        Ambil Absen Sekarang
+                    </button>
+                </div>
+            </div>`;
+            document.body.insertAdjacentHTML('beforeend', modalHTML);
+
+            // Start Webcam
+            navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } })
+                .then(stream => {
+                    const video = document.getElementById('webcamVideo');
+                    if (video) video.srcObject = stream;
+                })
+                .catch(err => {
+                    console.error("Webcam error:", err);
+                    showNotification('Kamera Gagal', 'Tidak dapat mengakses kamera perangkat.', 'error');
+                });
+        };
+
+        window.closeAttendanceModal = function() {
+            const video = document.getElementById('webcamVideo');
+            if (video && video.srcObject) {
+                video.srcObject.getTracks().forEach(track => track.stop());
+            }
+            const modal = document.getElementById('attendanceModal');
+            if (modal) modal.remove();
+        };
+
+        window.executeVerification = function(method) {
+            const video = document.getElementById('webcamVideo');
+            const canvas = document.getElementById('snapshotCanvas');
+            let photoData = null;
+
+            if (video && canvas) {
+                canvas.width = video.videoWidth || 320;
+                canvas.height = video.videoHeight || 240;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                photoData = canvas.toDataURL('image/png');
+            }
+
+            closeAttendanceModal();
+
+            const t = appState.currentTeacher;
+            const today = new Date().toISOString().split('T')[0];
+            const nowTime = new Date().toTimeString().split(' ')[0];
+            const attendance = getAttendance();
+
+            const newRecord = {
+                id: 'att-' + Date.now(),
+                teacherId: t.id,
+                teacherName: t.name,
+                date: today,
+                time: nowTime,
+                method: method,
+                status: 'Hadir',
+                notes: `Berhasil verifikasi via ${method}`,
+                photo: photoData
+            };
+
+            attendance.unshift(newRecord);
+            saveAttendance(attendance);
+
+            showNotification('Absensi Berhasil', `Kehadiran ${t.name} via ${method} berhasil dicatat.`, 'success', () => {
+                render();
+            });
+        };
+
+        window.submitStatusForm = function(e) {
+            e.preventDefault();
+            const statusOption = document.querySelector('input[name="statusOption"]:checked').value;
+            const notes = document.getElementById('statusNotes').value;
+
+            const t = appState.currentTeacher;
+            const today = new Date().toISOString().split('T')[0];
+            const nowTime = new Date().toTimeString().split(' ')[0];
+            const attendance = getAttendance();
+
+            const newRecord = {
+                id: 'att-' + Date.now(),
+                teacherId: t.id,
+                teacherName: t.name,
+                date: today,
+                time: nowTime,
+                method: 'Manual/Keterangan',
+                status: statusOption,
+                notes: notes,
+                photo: null
+            };
+
+            attendance.unshift(newRecord);
+            saveAttendance(attendance);
+
+            showNotification('Berhasil', `Keterangan ${statusOption} berhasil dikirim.`, 'success', () => {
+                render();
+            });
+        };
+
+        window.sendReminderWhatsApp = function(name, phone) {
+            showNotification('Pengingat Terkirim', `Pesan WhatsApp pengingat absensi berhasil dikirim ke ${name}.`, 'success');
+        };
+
+        window.exportToExcel = function() {
+            const table = document.getElementById('attendanceTableExport');
+            if (!table) return;
+            let html = table.outerHTML;
+            let blob = new Blob(['\ufeff' + html], { type: 'application/vnd.ms-excel' });
+            let url = URL.createObjectURL(blob);
+            let a = document.createElement('a');
+            a.href = url;
+            a.download = `Rekap_Absensi_${appState.selectedMonth}.xls`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            showNotification('Berhasil', 'File Excel rekap absensi berhasil diunduh.', 'success');
+        };
+
+        window.exportToPDF = function() {
+            const settings = getSettings();
+            const teachers = getTeachers();
+            const attendance = getAttendance();
+            const selectedMonth = appState.selectedMonth || new Date().toISOString().slice(0, 7);
+            const [year, month] = selectedMonth.split('-').map(Number);
+            const daysInMonth = new Date(year, month, 0).getDate();
+
+            let daysHeader = '';
+            for (let d = 1; d <= daysInMonth; d++) {
+                daysHeader += `<th style="border: 1px solid #cbd5e1; padding: 4px; text-align: center; font-size: 10px;">${d}</th>`;
+            }
+
+            let rowsHTML = '';
+            teachers.forEach(t => {
+                let cells = '';
+                for (let d = 1; d <= daysInMonth; d++) {
+                    const dayStr = String(d).padStart(2, '0');
+                    const dateStr = `${selectedMonth}-${dayStr}`;
+                    const att = attendance.find(a => a.teacherId === t.id && a.date === dateStr);
+                    let badge = '-';
+                    if (att) {
+                        if (att.status === 'Hadir') badge = 'H';
+                        else if (att.status === 'Sakit') badge = 'S';
+                        else if (att.status === 'Izin') badge = 'I';
+                        else if (att.status === 'Cuti') badge = 'C';
+                    }
+                    cells += `<td style="border: 1px solid #cbd5e1; padding: 4px; text-align: center; font-size: 10px; font-weight: bold;">${badge}</td>`;
+                }
+                rowsHTML += `
+                    <tr>
+                        <td style="border: 1px solid #cbd5e1; padding: 6px 8px; font-size: 11px; white-space: nowrap;">${t.name}</td>
+                        ${cells}
+                    </tr>
+                `;
+            });
+
+            const printWindow = window.open('', '_blank');
+            if (!printWindow) {
+                showNotification('Gagal', 'Pop-up diblokir oleh browser. Izinkan pop-up untuk mengunduh PDF.', 'error');
+                return;
+            }
+
+            printWindow.document.write(`
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <title>Rekap Absensi Guru - ${selectedMonth}</title>
+                    <style>
+                        body { font-family: 'Inter', Arial, sans-serif; color: #1e293b; margin: 20px; }
+                        h2 { margin-bottom: 4px; color: #0f172a; }
+                        p { margin-top: 0; color: #64748b; font-size: 12px; }
+                        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+                        th { background-color: #f1f5f9; color: #334155; font-size: 11px; }
+                    </style>
+                </head>
+                <body>
+                    <h2>REKAP ABSENSI GURU - ${settings.schoolName}</h2>
+                    <p>Periode Bulan: ${selectedMonth} | Tahun Ajaran: ${settings.academicYear}</p>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th style="border: 1px solid #cbd5e1; padding: 6px 8px; text-align: left;">Nama Guru</th>
+                                ${daysHeader}
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${rowsHTML}
+                        </tbody>
+                    </table>
+                    <script>
+                        window.onload = function() {
+                            setTimeout(() => {
+                                window.print();
+                                window.close();
+                            }, 500);
+                        }
+                    <\/script>
+                </body>
+                </html>
+            `);
+            printWindow.document.close();
+            showNotification('Berhasil', 'Dokumen PDF / cetak rekap absensi berhasil disiapkan.', 'success');
+        };
+
+        window.deleteTeacher = function(id) {
+            let teachers = getTeachers();
+            teachers = teachers.filter(t => t.id !== id);
+            saveTeachers(teachers);
+            showNotification('Berhasil', 'Data guru berhasil dihapus.', 'success', () => { render(); });
+        };
+
+        // Add Teacher Modal
+        function openAddTeacherModal() {
+            const modalHTML = `
+            <div id="teacherModal" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                <div class="bg-white rounded-3xl p-6 max-w-md w-full space-y-6 shadow-2xl fade-in">
+                    <h3 class="font-bold text-slate-800 text-base">Tambah Data Guru Baru</h3>
+                    <form id="teacherForm" class="space-y-4">
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Nama Lengkap & Gelar</label>
+                            <input type="text" id="newTeacherName" required class="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">NIP</label>
+                            <input type="text" id="newTeacherNip" required class="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Mata Pelajaran</label>
+                            <input type="text" id="newTeacherSubject" required class="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">PIN Keamanan (4 Digit)</label>
+                            <input type="password" id="newTeacherPin" maxlength="4" required class="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        </div>
+                        <div class="flex space-x-3 pt-2">
+                            <button type="button" onclick="document.getElementById('teacherModal').remove()" class="flex-1 bg-slate-200 hover:bg-slate-300 text-slate-700 py-3 rounded-xl text-xs font-semibold transition">Batal</button>
+                            <button type="submit" class="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white py-3 rounded-xl text-xs font-semibold transition">Simpan</button>
+                        </div>
+                    </form>
+                </div>
+            </div>`;
+            document.body.insertAdjacentHTML('beforeend', modalHTML);
+
+            document.getElementById('teacherForm').addEventListener('submit', (e) => {
+                e.preventDefault();
+                const name = document.getElementById('newTeacherName').value;
+                const nip = document.getElementById('newTeacherNip').value;
+                const subject = document.getElementById('newTeacherSubject').value;
+                const pin = document.getElementById('newTeacherPin').value;
+
+                let teachers = getTeachers();
+                const newT = {
+                    id: 'T' + String(teachers.length + 1).padStart(3, '0'),
+                    name, nip, subject, pin,
+                    barcode: 'BC-T' + String(teachers.length + 1).padStart(3, '0')
+                };
+                teachers.push(newT);
+                saveTeachers(teachers);
+
+                document.getElementById('teacherModal').remove();
+                showNotification('Berhasil', 'Data guru baru berhasil ditambahkan.', 'success', () => { render(); });
+            });
+        }
+
+        function attachEventHandlers() {
+            // Teacher Login Handler
+            const teacherLoginForm = document.getElementById('teacherLoginForm');
+            if (teacherLoginForm) {
+                teacherLoginForm.addEventListener('submit', (e) => {
+                    e.preventDefault();
+                    const id = document.getElementById('loginTeacherId').value;
+                    const pin = document.getElementById('loginPin').value;
+                    const teachers = getTeachers();
+                    const teacher = teachers.find(t => t.id === id);
+
+                    if (teacher && teacher.pin === pin) {
+                        appState.currentTeacher = teacher;
+                        appState.view = 'teacher_dashboard';
+                        render();
+                    } else {
+                        showNotification('Login Gagal', 'Guru atau PIN Keamanan tidak valid.', 'error');
+                    }
+                });
+            }
+
+            // Admin Login Handler
+            const adminLoginForm = document.getElementById('adminLoginForm');
+            if (adminLoginForm) {
+                adminLoginForm.addEventListener('submit', (e) => {
+                    e.preventDefault();
+                    const user = document.getElementById('adminUser').value;
+                    const pass = document.getElementById('adminPass').value;
+
+                    if (user === 'admin' && pass === 'admin123') {
+                        appState.view = 'admin_dashboard';
+                        render();
+                    } else {
+                        showNotification('Login Gagal', 'Username atau password admin salah.', 'error');
+                    }
+                });
+            }
+
+            // Admin Tabs
+            document.querySelectorAll('.admin-tab-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    appState.adminActiveTab = btn.getAttribute('data-tab');
+                    render();
+                });
+            });
+
+            // Calendar month change
+            const calendarMonthInput = document.getElementById('calendarMonthInput');
+            if (calendarMonthInput) {
+                calendarMonthInput.addEventListener('change', (e) => {
+                    appState.selectedMonth = e.target.value;
+                    render();
+                });
+            }
+
+            // Admin Manual Attendance Form
+            const adminManualForm = document.getElementById('adminManualForm');
+            if (adminManualForm) {
+                adminManualForm.addEventListener('submit', (e) => {
+                    e.preventDefault();
+                    const teacherId = document.getElementById('manualTeacherId').value;
+                    const date = document.getElementById('manualDate').value;
+                    const status = document.getElementById('manualStatus').value;
+                    const notes = document.getElementById('manualNotes').value || 'Input manual Admin';
+
+                    const teachers = getTeachers();
+                    const teacher = teachers.find(t => t.id === teacherId);
+                    if (!teacher) return;
+
+                    const attendance = getAttendance();
+                    const existingIndex = attendance.findIndex(a => a.teacherId === teacherId && a.date === date);
+                    const record = {
+                        id: 'att-' + Date.now(),
+                        teacherId: teacher.id,
+                        teacherName: teacher.name,
+                        date: date,
+                        time: new Date().toTimeString().split(' ')[0],
+                        method: 'Manual Admin',
+                        status: status,
+                        notes: notes,
+                        photo: null
+                    };
+
+                    if (existingIndex >= 0) {
+                        attendance[existingIndex] = record;
+                    } else {
+                        attendance.unshift(record);
+                    }
+
+                    saveAttendance(attendance);
+                    showNotification('Berhasil', `Absensi manual untuk ${teacher.name} berhasil disimpan.`, 'success', () => {
+                        appState.adminActiveTab = 'attendance';
+                        render();
+                    });
+                });
+            }
+
+            // Add teacher button
+            const addTeacherBtn = document.getElementById('addTeacherBtn');
+            if (addTeacherBtn) {
+                addTeacherBtn.addEventListener('click', () => {
+                    openAddTeacherModal();
+                });
+            }
+
+            // Settings Form
+            const settingsForm = document.getElementById('settingsForm');
+            if (settingsForm) {
+                settingsForm.addEventListener('submit', (e) => {
+                    e.preventDefault();
+                    const schoolName = document.getElementById('settingSchoolName').value;
+                    const academicYear = document.getElementById('settingAcademicYear').value;
+                    const maxCheckInTime = document.getElementById('settingMaxTime').value;
+
+                    saveSettings({ schoolName, academicYear, maxCheckInTime });
+                    showNotification('Berhasil', 'Pengaturan aplikasi berhasil diperbarui.', 'success');
+                });
+            }
+        }
+
+        // Initialize App on Load
+        window.onload = function() {
+            render();
+        };
+    </script>
+</body>
+</html>
